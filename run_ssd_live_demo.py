@@ -21,6 +21,8 @@ model_path = sys.argv[2]
 label_path = sys.argv[3]
 
 if len(sys.argv) >= 5:
+    if 'rtsp' not in sys.argv[4] and 'file' not in sys.argv[4] and 'http' not in sys.argv[4]:
+        raise RuntimeError("잘못된 주소")
     cap = cv2.VideoCapture(sys.argv[4], cv2.CAP_FFMPEG)  # capture from file
 else:
     cap = cv2.VideoCapture(0, cv2.CAP_FFMPEG)   # capture from camera
@@ -57,10 +59,8 @@ class_names = [name.strip() for name in open(label_path).readlines()]
 num_classes = len(class_names)
 
 
-if net_type == 'mb3-large-ssd-lite':
-    net = create_mobilenetv3_large_ssd_lite(len(class_names), is_test=True)
-elif net_type == 'mb3-small-ssd-lite':
-    net = create_mobilenetv3_small_ssd_lite(len(class_names), is_test=True)
+if net_type == 'mb1-ssd':
+    net = create_mobilenetv1_ssd(len(class_names), is_test=True)
 elif net_type == 'custom-mb3-small-ssd-lite':
     net = create_custom_mobilenetv3_small_ssd_lite(len(class_names), is_test=True)
 else:
@@ -85,7 +85,7 @@ while True:
         box = [int(x) for x in box]
         label = f"{class_names[labels[i]]}: {probs[i]:.2f}"
 
-        cv2.rectangle(orig_image, (box[0], box[1], box[2], box[3]), (255, 255, 0), 4)
+        cv2.rectangle(orig_image, (box[0], box[1], box[2] - box[0], box[3] - box[1]), (255, 255, 0), 4)
 
         cv2.putText(orig_image, label,
                     (box[0]+20, box[1]+40),
