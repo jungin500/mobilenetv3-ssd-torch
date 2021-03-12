@@ -1,6 +1,15 @@
 from ..transforms.transforms import *
 
 
+def TrainAugFinalComputation(img, boxes=None, labels=None):
+    return img / 128.0, boxes, labels
+
+def TestTrfmFinalComputation(img, boxes=None, labels=None):
+    return img / 128.0, boxes, labels
+
+def PredTrfmFinalComputation(img, boxes=None, labels=None):
+    return img / 128.0, boxes, labels
+
 class TrainAugmentation:
     def __init__(self, size, mean=0, std=1.0):
         """
@@ -8,6 +17,7 @@ class TrainAugmentation:
             size: the size the of final image.
             mean: mean pixel value per channel.
         """
+
         self.mean = mean
         self.size = size
         self.augment = Compose([
@@ -19,7 +29,7 @@ class TrainAugmentation:
             ToPercentCoords(),
             Resize(self.size),
             SubtractMeans(self.mean),
-            lambda img, boxes=None, labels=None: (img / std, boxes, labels),
+            TrainAugFinalComputation,
             ToTensor(),
         ])
 
@@ -36,11 +46,12 @@ class TrainAugmentation:
 
 class TestTransform:
     def __init__(self, size, mean=0.0, std=1.0):
+
         self.transform = Compose([
             ToPercentCoords(),
             Resize(size),
             SubtractMeans(mean),
-            lambda img, boxes=None, labels=None: (img / std, boxes, labels),
+            TestTrfmFinalComputation,
             ToTensor(),
         ])
 
@@ -50,10 +61,11 @@ class TestTransform:
 
 class PredictionTransform:
     def __init__(self, size, mean=0.0, std=1.0):
+
         self.transform = Compose([
             Resize(size),
             SubtractMeans(mean),
-            lambda img, boxes=None, labels=None: (img / std, boxes, labels),
+            PredTrfmFinalComputation,
             ToTensor()
         ])
 

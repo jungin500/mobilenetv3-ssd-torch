@@ -3,6 +3,7 @@ import os
 import logging
 import sys
 import itertools
+import cv2
 
 import torch
 from torch.utils.data import DataLoader, ConcatDataset
@@ -13,8 +14,8 @@ from vision.ssd.ssd import MatchPrior
 from vision.ssd.vgg_ssd import create_vgg_ssd
 from vision.ssd.mobilenetv1_ssd import create_mobilenetv1_ssd
 from vision.ssd.mobilenetv1_ssd_lite import create_mobilenetv1_ssd_lite
-from vision.ssd.mobilenet_v2_ssd_lite import create_mobilenetv2_ssd_lite
-from vision.ssd.mobilenetv3_ssd_lite import create_mobilenetv3_large_ssd_lite, create_mobilenetv3_small_ssd_lite
+from vision.ssd.mobilenet_v2_ssd_lite import create_mobilenetv2_ssd_lite, create_mobilenetv2_ssd_lite_predictor
+from vision.ssd.mobilenetv3_ssd_lite import create_mobilenetv3_large_ssd_lite, create_mobilenetv3_small_ssd_lite, create_custom_mobilenetv3_small_ssd_lite
 from vision.ssd.squeezenet_ssd_lite import create_squeezenet_ssd_lite
 from vision.datasets.voc_dataset import VOCDataset
 from vision.datasets.open_images import OpenImagesDataset
@@ -26,9 +27,6 @@ from vision.ssd.data_preprocessing import TrainAugmentation, TestTransform
 
 parser = argparse.ArgumentParser(
     description='Single Shot MultiBox Detector Training With Pytorch')
-
-parser.add_argument("--dataset_type", default="voc", type=str,
-                    help='Specify dataset type. Currently support voc and open_images.')
 
 parser.add_argument('--datasets', nargs='+', help='Dataset directory path')
 parser.add_argument('--validation_dataset', help='Dataset directory path')
@@ -172,31 +170,20 @@ if __name__ == '__main__':
     timer = Timer()
 
     logging.info(args)
-    if args.net == 'vgg16-ssd':
-        create_net = create_vgg_ssd
-        config = vgg_ssd_config
-    elif args.net == 'mb1-ssd':
-        create_net = create_mobilenetv1_ssd
-        config = mobilenetv1_ssd_config
-    elif args.net == 'mb1-ssd-lite':
-        create_net = create_mobilenetv1_ssd_lite
-        config = mobilenetv1_ssd_config
-    elif args.net == 'sq-ssd-lite':
-        create_net = create_squeezenet_ssd_lite
-        config = squeezenet_ssd_config
-    elif args.net == 'mb2-ssd-lite':
-        create_net = lambda num: create_mobilenetv2_ssd_lite(num, width_mult=args.mb2_width_mult)
-        config = mobilenetv1_ssd_config
-    elif args.net == 'mb3-large-ssd-lite':
+    if args.net == 'mb3-large-ssd-lite':
         create_net = lambda num: create_mobilenetv3_large_ssd_lite(num)
         config = mobilenetv1_ssd_config
     elif args.net == 'mb3-small-ssd-lite':
         create_net = lambda num: create_mobilenetv3_small_ssd_lite(num)
         config = mobilenetv1_ssd_config
+    elif args.net == 'custom-mb3-small-ssd-lite':
+        create_net = lambda num: create_custom_mobilenetv3_small_ssd_lite(num)
+        config = mobilenetv1_ssd_config
     else:
         logging.fatal("The net type is wrong.")
         parser.print_help(sys.stderr)
         sys.exit(1)
+
     train_transform = TrainAugmentation(config.image_size, config.image_mean, config.image_std)
     target_transform = MatchPrior(config.priors, config.center_variance,
                                   config.size_variance, 0.5)
@@ -206,23 +193,13 @@ if __name__ == '__main__':
     logging.info("Prepare training datasets.")
     datasets = []
     for dataset_path in args.datasets:
-        if args.dataset_type == 'voc':
-            dataset = VOCDataset(dataset_path, transform=train_transform,
-                                 target_transform=target_transform)
-            label_file = os.path.join(args.checkpoint_folder, "voc-model-labels.txt")
-            store_labels(label_file, dataset.class_names)
-            num_classes = len(dataset.class_names)
-        elif args.dataset_type == 'open_images':
-            dataset = OpenImagesDataset(dataset_path,
-                 transform=train_transform, target_transform=target_transform,
-                 dataset_type="train", balance_data=args.balance_data)
-            label_file = os.path.join(args.checkpoint_folder, "open-images-model-labels.txt")
-            store_labels(label_file, dataset.class_names)
-            logging.info(dataset)
-            num_classes = len(dataset.class_names)
+        print(dataset_path)
+        dataset = VOCDataset(dataset_path, transform=train_transform,
+                             target_transform=target_transform)
+        label_file = os.path.join(args.checkpoint_folder, "voc-model-labels.txt")
+        store_labels(label_file, dataset.class_names)
+        num_classes = len(dataset.class_names)
 
-        else:
-            raise ValueError(f"Dataset type {args.dataset_type} is not supported.")
         datasets.append(dataset)
     logging.info(f"Stored labels into file {label_file}.")
     train_dataset = ConcatDataset(datasets)
@@ -231,14 +208,8 @@ if __name__ == '__main__':
                               num_workers=args.num_workers,
                               shuffle=True)
     logging.info("Prepare Validation datasets.")
-    if args.dataset_type == "voc":
-        val_dataset = VOCDataset(args.validation_dataset, transform=test_transform,
-                                 target_transform=target_transform, is_test=True)
-    elif args.dataset_type == 'open_images':
-        val_dataset = OpenImagesDataset(dataset_path,
-                                        transform=test_transform, target_transform=target_transform,
-                                        dataset_type="test")
-        logging.info(val_dataset)
+    val_dataset = VOCDataset(args.validation_dataset, transform=test_transform,
+                             target_transform=target_transform, is_test=True)
     logging.info("validation dataset size: {}".format(len(val_dataset)))
 
     val_loader = DataLoader(val_dataset, args.batch_size,
@@ -303,8 +274,12 @@ if __name__ == '__main__':
                              center_variance=0.1, size_variance=0.2, device=DEVICE)
     optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum,
                                 weight_decay=args.weight_decay)
+    live_predictor = create_mobilenetv2_ssd_lite_predictor(net, candidate_size=200, device=DEVICE)
+
     logging.info(f"Learning rate: {args.lr}, Base net learning rate: {base_net_lr}, "
                  + f"Extra Layers learning rate: {extra_layers_lr}.")
+
+    class_names = [name.strip() for name in open('models/voc-model-labels.txt').readlines()]
 
     if args.scheduler == 'multi-step':
         logging.info("Uses MultiStepLR scheduler.")
@@ -321,10 +296,54 @@ if __name__ == '__main__':
 
     logging.info(f"Start training from epoch {last_epoch + 1}.")
     for epoch in range(last_epoch + 1, args.num_epochs):
-        scheduler.step()
+        # # Live validation with Image!
+        # net.eval()  # Change BN behaviour
+        # # cap = cv2.VideoCapture('rtsp://172.24.90.98:8554/ds-test')
+        # logging.info("Begin first frame")
+        # for _ in range(30):
+        #     # ret, orig_image = cap.read()
+        #     # if orig_image is None:
+        #     #     continue
+        #     orig_image = cv2.imread('/dataset/VOCdevkit/VOC2007/JPEGImages/000005.jpg', cv2.IMREAD_COLOR)
+        #     image = cv2.cvtColor(orig_image, cv2.COLOR_BGR2RGB)
+        #     timer.start()
+        #     boxes, labels, probs = live_predictor.predict(image, 10, 0.4)
+        #     interval = timer.end()
+        #     print('Time: {:.2f}s, Detect Objects: {:d}.'.format(interval, labels.size(0)))
+        #
+        #     for i in range(boxes.size(0)):
+        #         box = boxes[i, :]
+        #         box = [int(x) for x in box]
+        #         label = f"{class_names[labels[i]]}: {probs[i]:.2f}"
+        #
+        #         try:
+        #             cv2.rectangle(orig_image, (box[0], box[1], box[2], box[3]), (255, 255, 0), 4)
+        #
+        #             cv2.putText(orig_image, label,
+        #                         (box[0] + 20, box[1] + 40),
+        #                         cv2.FONT_HERSHEY_SIMPLEX,
+        #                         1,  # font scale
+        #                         (255, 0, 255),
+        #                         2)  # line type
+        #         except OverflowError:
+        #             pass
+        #     cv2.imshow('annotated', orig_image)
+        #     if cv2.waitKey(1) & 0xFF == ord('q'):
+        #         break
+        #
+        # if orig_image is not None:
+        #     cv2.imwrite(f"{args.net}-Epoch-{epoch}.jpg", orig_image)
+        #     logging.info("Saved annotated image to: " + f"{args.net}-Epoch-{epoch}.jpg")
+        # # cap.release()
+        # # cv2.destroyAllWindows()
+        # logging.info("End last frame")
+        #
+        # net.train()  # Change BN behaviour
+
         train(train_loader, net, criterion, optimizer,
               device=DEVICE, debug_steps=args.debug_steps, epoch=epoch)
-        
+        scheduler.step()
+
         if epoch % args.validation_epochs == 0 or epoch == args.num_epochs - 1:
             val_loss, val_regression_loss, val_classification_loss = test(val_loader, net, criterion, DEVICE)
             logging.info(
